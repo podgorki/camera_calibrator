@@ -203,7 +203,7 @@ def plot_undistorted_images(
             fig,
             f"err: {rmse:.2f}", (0, 100),
             cv2.FONT_HERSHEY_SIMPLEX,
-            3,
+            2,
             (255, 0, 0),
             3,
             cv2.LINE_AA
