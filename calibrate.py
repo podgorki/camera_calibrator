@@ -7,12 +7,17 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 from tqdm import tqdm
 import copy
 import sys
-from utils.io_utils import save_calib
-from typing import List
+from utils_io import save_calib
+from typing import List, Optional
 
 
-def calibrate_camera(args: argparse.Namespace, images: List[np.ndarray], rows: int, columns: int, size: float,
-                     cameraMatrix=None, distCoeffs=None) -> dict:
+def calibrate_camera(
+        args: argparse.Namespace,
+        images: List[np.ndarray],
+        rows: int, columns:
+        int, size: float,
+        cameraMatrix: Optional = None,
+        distCoeffs: Optional = None) -> dict:
     # criteria used by checkerboard pattern detector.
     # Change this if the code can't find the checkerboard
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
