@@ -105,7 +105,7 @@ def refine_calibration(calibration_dict: dict, width: int, height: int, threshol
             "image_indices": image_indices}
 
 
-def check_calibration_reprojection(calibration_dict: dict, images: List[np.ndarray], camera: str,
+def check_calibration_reprojection(calibration_dict: dict, images: List[np.ndarray],
                                    save_path: Path) -> None:
     cameraMatrix = calibration_dict["K"]
     distCoeffs = calibration_dict["D"]
@@ -116,11 +116,10 @@ def check_calibration_reprojection(calibration_dict: dict, images: List[np.ndarr
     image_indices = calibration_dict["image_indices"]
     per_view_errors = calibration_dict["per_view_errors"]
 
-    camera_save_path = save_path / camera
-    camera_save_path.mkdir(exist_ok=True, parents=True)
+    save_path.mkdir(exist_ok=True, parents=True)
     images = list(np.array(images)[image_indices])
     h, w, _ = images[0].shape
-    window_name = f"{camera} calibration reprojection images"
+    window_name = f"Calibration reprojection images"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
     view = True
     print("Instructions for viewing pleasure: Esc to quit viewing, q to quit.")
@@ -135,9 +134,9 @@ def check_calibration_reprojection(calibration_dict: dict, images: List[np.ndarr
             projpts, _ = cv2.projectPoints(obj, rvec, tvec, cameraMatrix, distCoeffs)
             cv2.circle(img, tuple(uv.astype(int)), 4, (255, 0, 0), -1)  # blue for detected
             cv2.circle(img, projpts.reshape(2).astype(int), 3, (0, 0, 255), -1)  # red for reprojection
-        if view == True:
+        if view is True:
             cv2.imshow(window_name, img)
-        cv2.imwrite(str(camera_save_path / f"{camera}_reprojection_{str(idx).zfill(4)}.png"), img)
+        cv2.imwrite(str(save_path / f"reprojection_{str(idx).zfill(4)}.png"), img)
         k = cv2.waitKey(0)
         if k == 27:
             print("Done lookin'")
@@ -146,278 +145,6 @@ def check_calibration_reprojection(calibration_dict: dict, images: List[np.ndarr
         elif k == ord('q'):
             print('Quitting!')
             sys.exit(0)
-
-
-def stereo_calibrate(calibration_dict_left: dict, calibration_dict_right: dict, width: int, height: int) -> dict:
-    """
-    Returned R, T are take points from the right to the left frame
-    """
-    mtx_left, dist_left = calibration_dict_left["K"], calibration_dict_left["D"]
-    mtx_right, dist_right = calibration_dict_right["K"], calibration_dict_right["D"]
-
-    image_indices_left = calibration_dict_left["image_indices"]
-    image_indices_right = calibration_dict_right["image_indices"]
-
-    mask_left = np.isin(image_indices_left, image_indices_right)
-    mask_right = np.isin(image_indices_right, image_indices_left)
-
-    image_indices_left = np.array(image_indices_left)[mask_left]
-    image_indices_right = np.array(image_indices_right)[mask_right]
-
-    assert (image_indices_left == image_indices_right).all()  # these should be the same
-
-    objpoints_left = np.array(calibration_dict_left["objpoints"])[mask_left]
-    objpoints_right = np.array(calibration_dict_right["objpoints"])[mask_right]
-
-    assert (objpoints_left == objpoints_right).all()  # these should be the same
-
-    image_indices_left = list(image_indices_left)
-
-    rvecs_left = list(np.array(calibration_dict_left["rvecs"])[mask_left])
-    tvecs_left = list(np.array(calibration_dict_left["tvecs"])[mask_left])
-
-    rvecs_right = list(np.array(calibration_dict_right["rvecs"])[mask_right])
-    tvecs_right = list(np.array(calibration_dict_right["tvecs"])[mask_right])
-
-    imgpoints_left = list(np.array(calibration_dict_left["imgpoints"])[mask_left])
-    imgpoints_right = list(np.array(calibration_dict_right["imgpoints"])[mask_right])
-
-    # change this if stereo calibration not good.
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.0001)
-
-    stereocalibration_flags = cv2.CALIB_USE_EXTRINSIC_GUESS + cv2.CALIB_FIX_INTRINSIC
-    ret, CM_left, D_left, CM_right, D_right, R, T, E, F, per_view_errors = cv2.stereoCalibrateExtended(
-        objectPoints=objpoints_left,
-        imagePoints1=imgpoints_left,
-        imagePoints2=imgpoints_right,
-        cameraMatrix1=mtx_left,
-        distCoeffs1=dist_left,
-        cameraMatrix2=mtx_right,
-        distCoeffs2=dist_right,
-        imageSize=(width, height),
-        R=np.eye(3),
-        T=np.array(
-            [[-1.1], [0.], [0.]]),
-        criteria=criteria,
-        flags=stereocalibration_flags)
-
-    return {"rmse": ret,
-            "K1": CM_left, "D1": D_left,
-            "K2": CM_right, "D2": D_right,
-            "R": R, "T": T, "E": E, "F": F,  # R, T extrinsics from right to left
-            "image_points_left": imgpoints_left,
-            "image_points_right": imgpoints_right,
-            "object_points": objpoints_left,  # left and right should now be the same
-            "rvecs_left": rvecs_left,  # rotate objpts to left frame
-            "tvecs_left": tvecs_left,  # translate objpts to left frame
-            "rvecs_right": rvecs_right,  # rotate objpts to right frame
-            "tvecs_right": tvecs_right,  # translate objpts to right frame
-            "per_view_errors": per_view_errors,  # per view errors for both left and right
-            "image_indices": image_indices_left}
-
-
-def refine_stereo_calibration(stereo_calibration_dict: dict, threshold: float, width: int, height: int) -> dict:
-    # get the goodies
-    mtx_left = stereo_calibration_dict["K1"]
-    dist_left = stereo_calibration_dict["D1"]
-    mtx_right = stereo_calibration_dict["K2"]
-    dist_right = stereo_calibration_dict["D2"]
-    R = stereo_calibration_dict["R"]
-    T = stereo_calibration_dict["T"]
-    per_view_errors = stereo_calibration_dict["per_view_errors"]
-    image_points_left = stereo_calibration_dict["image_points_left"]
-    image_points_right = stereo_calibration_dict["image_points_right"]
-    rvectors_left = stereo_calibration_dict["rvecs_left"]
-    tvectors_left = stereo_calibration_dict["tvecs_left"]
-    rvectors_right = stereo_calibration_dict["rvecs_right"]
-    tvectors_right = stereo_calibration_dict["tvecs_right"]
-    object_points = stereo_calibration_dict["object_points"]
-    image_indices = stereo_calibration_dict["image_indices"]
-
-    # remove the badies
-    mask1 = per_view_errors[:, 0] < threshold
-    mask2 = per_view_errors[:, 1] < threshold
-    indices = np.arange(per_view_errors[:, 0].shape[0])[mask1 & mask2]
-    if len(indices) < 2:
-        raise ValueError(f"Number of low rsme image sets too low: {len(indices)}!")
-    image_indices = list(np.array(image_indices)[indices])
-    good_image_points_left = list(np.array(image_points_left)[indices])
-    good_image_points_right = list(np.array(image_points_right)[indices])
-    good_object_points = list(np.array(object_points)[indices])
-    good_rvectors_left = list(np.array(rvectors_left)[indices])
-    good_tvectors_left = list(np.array(tvectors_left)[indices])
-    good_rvectors_right = list(np.array(rvectors_right)[indices])
-    good_tvectors_right = list(np.array(tvectors_right)[indices])
-
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10000000, 0.00000001)
-    stereocalibration_flags = cv2.CALIB_USE_EXTRINSIC_GUESS + cv2.CALIB_FIX_INTRINSIC
-
-    ret, CM_left, D_left, CM_right, D_right, new_R, new_T, E, F, good_per_view_errors = cv2.stereoCalibrateExtended(
-        objectPoints=good_object_points,
-        imagePoints1=good_image_points_left,
-        imagePoints2=good_image_points_right,
-        cameraMatrix1=mtx_left,
-        distCoeffs1=dist_left,
-        cameraMatrix2=mtx_right,
-        distCoeffs2=dist_right,
-        imageSize=(width, height),
-        R=R,
-        T=T,
-        criteria=criteria,
-        flags=stereocalibration_flags)
-
-    return {"rmse": ret,
-            "K1": CM_left, "D1": D_left,
-            "K2": CM_right, "D2": D_right,
-            "R": new_R, "T": new_T, "E": E, "F": F,  # R, T extrinsics from right to left
-            "image_points_left": good_image_points_left,
-            "image_points_right": good_image_points_right,
-            "object_points": good_object_points,
-            "rvecs_left": good_rvectors_left,
-            "tvecs_left": good_tvectors_left,
-            "rvecs_right": good_rvectors_right,
-            "tvecs_right": good_tvectors_right,
-            "per_view_errors": good_per_view_errors,
-            "image_indices": image_indices}
-
-
-def check_stereo_reprojection(stereo_dict: dict, images_left: List[np.ndarray], images_right: List[np.ndarray],
-                              save_path: Path) -> None:
-    camera_save_path = save_path / 'stereo'
-    camera_save_path.mkdir(exist_ok=True, parents=True)
-
-    K1, D1 = stereo_dict["K1"], stereo_dict["D1"]
-    K2, D2 = stereo_dict["K2"], stereo_dict["D2"]
-
-    R = stereo_dict["R"]  # coordinates 2 -> 1
-    T = stereo_dict["T"]  # coordinates 2 -> 1
-
-    image_indices = stereo_dict["image_indices"]
-    images_left = list(np.array(images_left)[image_indices])
-    images_right = list(np.array(images_right)[image_indices])
-    assert len(images_left) == len(images_right)
-
-    rvecs_left = stereo_dict['rvecs_left']
-    tvecs_left = stereo_dict['tvecs_left']
-
-    tvecs_right = stereo_dict['tvecs_right']
-    rvecs_right = stereo_dict['rvecs_right']
-
-    image_points_left = stereo_dict["image_points_left"]
-    image_points_right = stereo_dict["image_points_right"]
-
-    object_points_left = stereo_dict["object_points"]
-    object_points_right = stereo_dict["object_points"]
-
-    h, w, c = images_left[0].shape
-    window_name = f"stereo calibration reprojection images"
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    view = True
-    print("Instructions for viewing pleasure: Esc to quit viewing, q to quit.")
-    for idx, img_left, img_right, imgpts_left, imgpts_right, objptsl, objptsr, rvecl, rvecr, tvecl, tvecr in zip(
-            image_indices,
-            images_left,
-            images_right,
-            image_points_left,
-            image_points_right,
-            object_points_left,
-            object_points_right,
-            rvecs_left,
-            rvecs_right,
-            tvecs_left,
-            tvecs_right):
-
-        img_display = np.zeros((h, 2 * w, c), dtype=np.uint8)
-        img_left = copy.copy(img_left)
-        img_right = copy.copy(img_right)
-        imgpts_left = copy.copy(imgpts_left).reshape(-1, 2)
-        imgpts_right = copy.copy(imgpts_right).reshape(-1, 2)
-        # project the right points to the left imaqge
-        for uv, obj in zip(imgpts_left, objptsr):
-            R_to_camera = cv2.Rodrigues(rvecr)
-            proj_mtx = np.block([[np.linalg.inv(R), -T], [0, 0, 0, 1]]) @ \
-                       np.block([[R_to_camera[0], tvecr], [0, 0, 0, 1]])
-            projpts_left, _ = cv2.projectPoints(obj, cv2.Rodrigues(proj_mtx[:3, :3])[0], proj_mtx[:3, 3], K1, D1)
-            cv2.circle(img_left, tuple(uv.astype(int)), 4, (255, 0, 0), -1)  # blue for detected on left
-            cv2.circle(img_left, projpts_left.reshape(2).astype(int), 3, (0, 0, 255), -1)  # red for reprojection
-
-            projpts_right, _ = cv2.projectPoints(obj, rvecr, tvecr, K2, D2)
-            cv2.circle(img_right, projpts_right.reshape(2).astype(int), 2, (0, 255, 0), -1)
-            # green for original detected on right
-            # green and blue should be the same
-
-        # # project the left points to the right image
-        for uv, obj in zip(imgpts_right, objptsl):
-            R_to_camera = cv2.Rodrigues(rvecl)
-            # move obj points to the left camera frame
-            proj_mtx = np.block([[R, T], [0, 0, 0, 1]]) @ \
-                       np.block([[R_to_camera[0], tvecl], [0, 0, 0, 1]])
-
-            projpts_right, _ = cv2.projectPoints(obj, cv2.Rodrigues(proj_mtx[:3, :3])[0], proj_mtx[:3, 3], K2, D2)
-
-            cv2.circle(img_right, tuple(uv.astype(int)), 4, (255, 0, 0), -1)  # blue for detected on right
-            cv2.circle(img_right, projpts_right.reshape(2).astype(int), 3, (0, 0, 255), -1)  # red for reprojection
-
-            projpts_left, _ = cv2.projectPoints(obj, rvecl, tvecl, K1, D1)
-            cv2.circle(img_left, projpts_left.reshape(2).astype(int), 2, (0, 255, 0), -1)
-            # green for original detected on left
-            # green and blue should be the same
-
-        img_display[:, :w, :] = img_left
-        img_display[:, w:, :] = img_right
-        if view == True:
-            cv2.imshow(window_name, img_display)
-        cv2.imwrite(str(camera_save_path / f"stereo_reprojection_{str(idx).zfill(4)}.png"), img_display)
-        k = cv2.waitKey(0)
-        if k == 27:
-            print("Done lookin'")
-            view = False
-            cv2.destroyAllWindows()
-        elif k == ord('q'):
-            print('Quitting!')
-            sys.exit(0)
-
-
-def stereo_rectify(refined_stereo_calibration_dict: dict, width: int, height: int) -> dict:
-    rmse = refined_stereo_calibration_dict["rmse"]
-    K1 = refined_stereo_calibration_dict["K1"]
-    D1 = refined_stereo_calibration_dict["D1"]
-    K2 = refined_stereo_calibration_dict["K2"]
-    D2 = refined_stereo_calibration_dict["D2"]
-    R = refined_stereo_calibration_dict["R"]
-    T = refined_stereo_calibration_dict["T"]
-    F = refined_stereo_calibration_dict["F"]
-    E = refined_stereo_calibration_dict["E"]
-
-    R1, R2, P1, P2, Q, roi1, roi2 = cv2.stereoRectify(cameraMatrix1=K1, distCoeffs1=D1,
-                                                      cameraMatrix2=K2, distCoeffs2=D2,
-                                                      imageSize=(width, height),
-                                                      R=R, T=T, flags=cv2.CALIB_ZERO_DISPARITY, alpha=-1)
-    return {"rmse": rmse, "R1": R1, "R2": R2, "P1": P1, "P2": P2, "Q": Q, "roi1": roi1, "roi2": roi2,
-            "width": width, "height": height, "F": F, "E": E, "R": R, "T": T,
-            "K1": K1, "K2": K2, "D1": D1, "D2": D2}
-
-
-def save_stereo_rectify(filename, rectify_dict: dict) -> None:
-    np.savez_compressed(filename,
-                        rmse=rectify_dict["rmse"],
-                        width=rectify_dict["width"],
-                        heigth=rectify_dict["height"],
-                        E=rectify_dict["E"],
-                        F=rectify_dict["F"],
-                        Q=rectify_dict["Q"],
-                        R=rectify_dict["R"],
-                        T=rectify_dict["T"],
-                        R1=rectify_dict["R1"],
-                        P1=rectify_dict["P1"],
-                        K1=rectify_dict["K1"],
-                        D1=rectify_dict["D1"],
-                        roi1=rectify_dict["roi1"],
-                        R2=rectify_dict["R2"],
-                        P2=rectify_dict["P2"],
-                        K2=rectify_dict["K2"],
-                        D2=rectify_dict["D2"],
-                        roi2=rectify_dict["roi2"])
 
 
 def plot_and_save_corners(figs_path: Path, width: int, height: int,
@@ -482,50 +209,18 @@ def save_camera_calibration(calibration_dict: dict, image_paths: List[Path], fil
                         image_indices=calibration_dict["image_indices"])
 
 
-def save_stereo_calibration(filename: Path, image_paths: List[Path], stereo_calibration_dict: dict) -> None:
-    np.savez_compressed(filename,
-                        image_paths=image_paths,
-                        rmse=stereo_calibration_dict["rmse"],
-                        K1=stereo_calibration_dict["K1"],
-                        D1=stereo_calibration_dict["D1"],
-                        K2=stereo_calibration_dict["K2"],
-                        D2=stereo_calibration_dict["D2"],
-                        R=stereo_calibration_dict["R"],
-                        T=stereo_calibration_dict["T"],
-                        E=stereo_calibration_dict["E"],
-                        F=stereo_calibration_dict["F"],
-                        image_points_left=stereo_calibration_dict["image_points_left"],
-                        image_points_right=stereo_calibration_dict["image_points_right"],
-                        object_points=stereo_calibration_dict["object_points"],
-                        rvecs_left=stereo_calibration_dict["rvecs_left"],
-                        tvecs_left=stereo_calibration_dict["tvecs_left"],
-                        rvecs_right=stereo_calibration_dict["rvecs_right"],
-                        tvecs_right=stereo_calibration_dict["tvecs_right"],
-                        per_view_errors=stereo_calibration_dict["per_view_errors"],
-                        image_indices=stereo_calibration_dict["image_indices"])
-
-
-def print_calibration_results(calibration_dict: dict, refined_calibration_dict: dict, camera: str) -> None:
-    print(f"\n{camera} results:\n")
-    print(f"Initial {camera} results:\n")
+def print_calibration_results(calibration_dict: dict, refined_calibration_dict: dict) -> None:
+    print(f"Initial results:\n")
     print(f"Initial RSME: {calibration_dict['rmse']:.2f}")
     for k in list(calibration_dict.keys()):
-        if camera == "stereo":
-            if k == "K1" or k == "K2" or k == "D1" or k == "D2" or k == "R" or k == "T" or k == "E" or k == "E" or k == "F":
-                print(f"{k}:\n{calibration_dict[k]}")
-        else:
-            if k == "K" or k == "D":
-                print(f"{k}:\n{calibration_dict[k]}")
+        if k == "K" or k == "D":
+            print(f"{k}:\n{calibration_dict[k]}")
 
-    print(f"\nRefined {camera} results:\n")
+    print(f"\nRefined results:\n")
     print(f"Refined RSME: {refined_calibration_dict['rmse']:.2f}")
-    for k in list(refined_calibration_dict.keys()):
-        if camera == "stereo":
-            if k == "K1" or k == "K2" or k == "D1" or k == "D2" or k == "R" or k == "T" or k == "E" or k == "E" or k == "F":
-                print(f"{k}:\n{refined_calibration_dict[k]}")
-        else:
-            if k == "K" or k == "D":
-                print(f"{k}:\n{refined_calibration_dict[k]}")
+    for k in list(refined_calibration_dict.keys())
+        if k == "K" or k == "D":
+            print(f"{k}:\n{refined_calibration_dict[k]}")
 
 
 def plot_undistorted_images_and_epipoles(save_path: Path,
@@ -643,143 +338,41 @@ def run(args: argparse.Namespace) -> None:
     figs_path.mkdir(exist_ok=True, parents=True)
     data_path = outputs_root / "data"
     data_path.mkdir(exist_ok=True, parents=True)
+    camera_images = sorted((root / args.left_folder).glob('*.png'))
 
-    left_images = sorted((root / args.left_folder).glob('*.png'))
-    right_images = sorted((root / args.right_folder).glob('*.png'))
-    print(f"Found: {len(left_images)} left images and {len(right_images)} right images...")
-    left_images_list = []
-    right_images_list = []
-    for im1, im2 in tqdm(zip(left_images, right_images), desc='Loading images...'):
-        _im = cv2.imread(str(im1), 1)
-        left_images_list.append(_im)
+    print(f"Found: {len(camera_images)} images")
+    camera_images_list = []
+    for image_path in tqdm(camera_images, desc='Loading images...'):
+        im = cv2.imread(str(image_path), 1)
+        camera_images_list.append(im)
+    height, width, _ = camera_images_list[0].shape
 
-        _im = cv2.imread(str(im2), 1)
-        right_images_list.append(_im)
-    height, width, _ = left_images_list[0].shape
-
-    if not args.precomputed_left:
-        calibration_dict1 = calibrate_camera(args, left_images_list, args.rows, args.columns, args.size)
+    if not args.precomputed:
+        calibration_dict1 = calibrate_camera(args, camera_images_list, args.rows, args.columns, args.size)
         save_camera_calibration(calibration_dict=calibration_dict1,
-                                image_paths=left_images,
-                                filename=data_path / "left_calibration.npz")
+                                image_paths=camera_images,
+                                filename=data_path / "calibration.npz")
     else:
-        calibration_dict1 = np.load(data_path / "left_calibration.npz")
+        calibration_dict1 = np.load(data_path / "calibration.npz")
 
     refined_calibration_dict1 = refine_calibration(calibration_dict1, width, height, threshold=args.camera_threshold)
-    if args.check_left:
-        check_calibration_reprojection(refined_calibration_dict1, left_images_list, 'left', figs_path)
+    if args.check:
+        check_calibration_reprojection(refined_calibration_dict1, camera_images_list, figs_path)
     save_camera_calibration(calibration_dict=refined_calibration_dict1,
-                            image_paths=left_images,
-                            filename=data_path / "left_refined_calibration.npz")
+                            image_paths=camera_images,
+                            filename=data_path / "refined_calibration.npz")
 
-    print_calibration_results(calibration_dict1, refined_calibration_dict1, 'left')
-
-    if not args.precomputed_right:
-        calibration_dict2 = calibrate_camera(args,
-                                             right_images_list,
-                                             args.rows,
-                                             args.columns,
-                                             args.size)
-
-        save_camera_calibration(calibration_dict=calibration_dict2,
-                                image_paths=right_images,
-                                filename=data_path / "right_calibration.npz")
-    else:
-        calibration_dict2 = np.load(data_path / "right_calibration.npz")
-
-    # refine cals
-    refined_calibration_dict2 = refine_calibration(calibration_dict2, width, height, threshold=args.camera_threshold)
-
-    if args.check_right:
-        check_calibration_reprojection(refined_calibration_dict2, right_images_list, 'right', figs_path)
-
-    save_camera_calibration(calibration_dict=refined_calibration_dict2,
-                            image_paths=right_images,
-                            filename=data_path / "right_refined_calibration.npz")
-
-    print_calibration_results(calibration_dict2, refined_calibration_dict2, 'right')
-
-    plot_and_save_corners(figs_path,
-                          width, height,
-                          calibration_dict1["imgpoints"],
-                          calibration_dict2["imgpoints"],
-                          calibration_dict1["per_view_errors"],
-                          calibration_dict2["per_view_errors"])
-
-    plot_and_save_corners(figs_path,
-                          width, height,
-                          refined_calibration_dict1["imgpoints"],
-                          refined_calibration_dict2["imgpoints"],
-                          refined_calibration_dict1["per_view_errors"],
-                          refined_calibration_dict2["per_view_errors"],
-                          filename="refined_detected_corners",
-                          title="Refined detected corners for each camera coloured by RMSE")
-
-    if not args.precomputed_stereo:
-        stereo_calibration_dict = stereo_calibrate(refined_calibration_dict1, refined_calibration_dict2, width, height)
-        save_stereo_calibration(data_path / "stereo_calibration.npz", left_images, stereo_calibration_dict)
-
-        plot_and_save_corners(figs_path,
-                              width, height,
-                              stereo_calibration_dict["image_points_left"],
-                              stereo_calibration_dict["image_points_right"],
-                              stereo_calibration_dict["per_view_errors"][:, 0],
-                              stereo_calibration_dict["per_view_errors"][:, 1],
-                              filename="detected_stereo_corners",
-                              title="Detected stereo corners for each camera coloured by RMSE")
-
-    else:
-        stereo_calibration_dict = np.load(data_path / "stereo_calibration.npz")
-
-    refined_stereo_calibration_dict = refine_stereo_calibration(stereo_calibration_dict, args.stereo_threshold,
-                                                                width, height)
-
-    print_calibration_results(stereo_calibration_dict, refined_stereo_calibration_dict, "stereo")
-
-    if args.check_stereo:
-        check_stereo_reprojection(refined_stereo_calibration_dict, left_images_list, right_images_list, figs_path)
-
-    save_stereo_calibration(data_path / "refined_stereo_calibration.npz",
-                            left_images,
-                            refined_stereo_calibration_dict)
-
-    rectify_dict = stereo_rectify(refined_stereo_calibration_dict, width, height)
-    save_stereo_rectify(data_path / "rectified_stereo_calibration.npz", rectify_dict)
-
-    plot_and_save_corners(figs_path,
-                          width, height,
-                          refined_stereo_calibration_dict["image_points_left"],
-                          refined_stereo_calibration_dict["image_points_right"],
-                          refined_stereo_calibration_dict["per_view_errors"][:, 0],
-                          refined_stereo_calibration_dict["per_view_errors"][:, 1],
-                          filename="refined_detected_stereo_corners",
-                          title="Refined detected stereo corners for each camera coloured by RMSE")
-
-    plot_undistorted_images_and_epipoles(figs_path / "undistorted", left_images_list, right_images_list, rectify_dict)
-    if not args.no_output_kitti:
-        save_kitti_calibs(data_path / 'calibration.txt', rectify_dict)
+    print_calibration_results(calibration_dict1, refined_calibration_dict1)
 
 
 def make_parser() -> argparse.Namespace:
     parser = argparse.ArgumentParser("Calibrate from a set of synchronised left and right images.")
     parser.add_argument('--root', type=str,
-                        help='Root to left and right images')
-    parser.add_argument('--left_folder', type=str, default='left',
-                        help='Folder containing the left images. Default=\'left\'.')
-    parser.add_argument('--right_folder', type=str, default='right',
-                        help='Folder containing the right images. Default=\'right\'.')
-    parser.add_argument('--precomputed_left', action="store_true", default=False,
-                        help='Use precomputed left calibrations matricies stored in outputs\/data/. Default=False')
-    parser.add_argument('--precomputed_right', action="store_true", default=False,
-                        help='Use precomputed right calibrations matricies stored in outputs\/data/. Default=False')
-    parser.add_argument('--precomputed_stereo', action="store_true", default=False,
-                        help='Use precomputed stereo extrinsic matricies stored in outputs\/data/. Default=False')
-    parser.add_argument('--check_left', action="store_true", default=False,
+                        help='Root to images')
+    parser.add_argument('--precomputed', action="store_true", default=False,
+                        help='Use precomputed calibrations matricies stored in outputs\/data/. Default=False')
+    parser.add_argument('--check', action="store_true", default=False,
                         help='Check the re-projections of each set of left corners using the refined results. Default=False')
-    parser.add_argument('--check_right', action="store_true", default=False,
-                        help='Check the re-projections of each set of right corners using the refined results. Default=False')
-    parser.add_argument('--check_stereo', action="store_true", default=False,
-                        help='Check the re-projections of the refined stereo calibrations. Default=False')
     parser.add_argument('--columns', type=int, default=7,
                         help='Number of columns on the checkerboard. Default=7')
     parser.add_argument('--rows', type=int, default=5,
@@ -789,15 +382,8 @@ def make_parser() -> argparse.Namespace:
     parser.add_argument('--camera_threshold', type=float, default=0.5,
                         help='RMSE threshold for filtering image and object points during camera calibration '
                              'refinement.')
-    parser.add_argument('--stereo_threshold', type=float, default=10,
-                        help='RMSE threshold for filtering image and object points during stereo calibration '
-                             'refinement.')
     parser.add_argument('--show_calibration_checkerboards', action='store_true', default=False,
                         help='Show checkerboards with their detected corners overlaid. Default=False')
-    parser.add_argument('--show_stereo_checkerboards', action='store_true', default=False,
-                        help='Show stereo checkerboards with their detected corners overlaid. Default=False')
-    parser.add_argument('--no_output_kitti', action='store_true', default=False,
-                        help='Do not output kitti calib.txt. Default=False')
     return parser
 
 
