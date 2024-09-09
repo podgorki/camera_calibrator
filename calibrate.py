@@ -152,52 +152,6 @@ def check_calibration_reprojection(calibration_dict: dict, images: List[np.ndarr
             sys.exit(0)
 
 
-def plot_and_save_corners(figs_path: Path, width: int, height: int,
-                          imgpoints1: np.ndarray, imgpoints2: np.ndarray,
-                          per_view_errors1: np.ndarray, per_view_errors2: np.ndarray,
-                          filename: str = "detected_corners",
-                          title: str = "Detected corners for each camera coloured by RMSE") -> None:
-    fig, ax = plt.subplots(1, 2)
-    plt.title("Corners detected during camera calibration.")
-    u1, v1, c1 = [], [], []
-    for view_pts, view_error in zip(imgpoints1, per_view_errors1.reshape(-1)):
-        plt_pts = view_pts.reshape(-1, 2)
-        cols = np.ones_like(imgpoints1[0].reshape(-1, 2)[:, 0]) * view_error
-        u1.append(plt_pts[:, 0])
-        v1.append(-plt_pts[:, 1])
-        c1.append(cols)
-    corner1_plot = ax[0].scatter(u1, v1, alpha=0.5, c=c1, cmap="inferno")
-    ax[0].set_title('left')
-    ax[0].set_ylabel('v')
-    ax[0].set_ylim(-height, 0)
-    ax[0].set_xlim(0, width)
-    ax[0].set_xlabel('u')
-    divider1 = make_axes_locatable(ax[0])
-    cax1 = divider1.append_axes('right', size='5%', pad=0.05)
-    plt.colorbar(corner1_plot, cax=cax1, orientation='vertical')
-
-    u2, v2, c2 = [], [], []
-    for view_pts, view_error in zip(imgpoints2, per_view_errors2.reshape(-1)):
-        plt_pts = view_pts.reshape(-1, 2)
-        cols = np.ones_like(imgpoints2[0].reshape(-1, 2)[:, 0]) * view_error
-        u2.append(plt_pts[:, 0])
-        v2.append(-plt_pts[:, 1])
-        c2.append(cols)
-    corner2_plot = ax[1].scatter(u2, v2, alpha=0.5, c=c2, cmap="inferno")
-    divider2 = make_axes_locatable(ax[1])
-    cax2 = divider2.append_axes('right', size='5%', pad=0.05)
-    plt.colorbar(corner2_plot, cax=cax2, orientation='vertical')
-    ax[1].set_ylabel('v')
-    ax[1].set_xlabel('u')
-    ax[1].set_ylim(-height, 0)
-    ax[1].set_yticks([])
-    ax[1].set_xlim(0, width)
-    ax[1].set_title('right')
-    plt.suptitle(title)
-    plt.tight_layout()
-    plt.savefig(str((figs_path / filename).with_suffix('.pdf')))
-
-
 def save_camera_calibration(calibration_dict: dict, image_paths: List[Path], filename: Path) -> None:
     np.savez_compressed(filename,
                         image_paths=image_paths,
@@ -228,146 +182,69 @@ def print_calibration_results(calibration_dict: dict, refined_calibration_dict: 
             print(f"{k}:\n{refined_calibration_dict[k]}")
 
 
-def plot_undistorted_images_and_epipoles(save_path: Path,
-                                         left_images: List[np.ndarray], right_images: List[np.ndarray],
-                                         rectify_dict: dict) -> None:
-    save_path.mkdir(parents=True, exist_ok=True)
-    left_image = left_images[0]
-    right_image = right_images[0]
+def plot_undistorted_images(
+        save_path: Path,
+        images: List[Path],
+        rectify_dict: dict) -> None:
+    rectified_save_path = (save_path / 'rectified')
+    rectified_save_path.mkdir(parents=True, exist_ok=True)
 
     rmse = rectify_dict["rmse"]
-    w = rectify_dict["width"]
-    h = rectify_dict["height"]
-    K1 = rectify_dict["K1"]
-    D1 = rectify_dict["D1"]
-    R1 = rectify_dict["R1"]
-    P1 = rectify_dict["P1"]
-    K2 = rectify_dict["K2"]
-    D2 = rectify_dict["D2"]
-    R2 = rectify_dict["R2"]
-    P2 = rectify_dict["P2"]
+    K1 = rectify_dict["K"]
+    D1 = rectify_dict["D"]
 
-    map_l1, map_l2 = cv2.initUndistortRectifyMap(K1, D1, R1, P1, (w, h), cv2.CV_32FC1)
-    map_r1, map_r2 = cv2.initUndistortRectifyMap(K2, D2, R2, P2, (w, h), cv2.CV_32FC1)
+    for i, image in enumerate(images):
+        h, w, _ = image.shape
+        new_K, roi = cv2.getOptimalNewCameraMatrix(K1, D1, (w, h), 1, (w, h))
+        map_l1, map_l2 = cv2.initUndistortRectifyMap(K1, D1, None, new_K, (w, h), cv2.CV_32FC1)
+        rectified_image = cv2.remap(image, map_l1, map_l2, cv2.INTER_LINEAR)
+        fig = rectified_image
+        cv2.putText(
+            fig,
+            f"err: {rmse:.2f}", (0, 100),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            3,
+            (255, 0, 0),
+            3,
+            cv2.LINE_AA
+        )
 
-    rect1 = cv2.remap(left_image, map_l1, map_l2, cv2.INTER_LINEAR)
-    rect2 = cv2.remap(right_image, map_r1, map_r2, cv2.INTER_LINEAR)
-
-    sift = cv2.SIFT_create()
-    rect1_gray = cv2.cvtColor(rect1, cv2.COLOR_BGR2GRAY).astype(np.uint8)
-    rect2_gray = cv2.cvtColor(rect2, cv2.COLOR_BGR2GRAY).astype(np.uint8)
-    kp1_rect, des1_rect = sift.detectAndCompute(rect1_gray, None)
-    kp2_rect, des2_rect = sift.detectAndCompute(rect2_gray, None)
-    # FLANN parameters
-    FLANN_INDEX_KDTREE = 1
-    index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
-    search_params = dict(checks=50)
-    flann = cv2.FlannBasedMatcher(index_params, search_params)
-    matches_rect = flann.knnMatch(des1_rect, des2_rect, k=2)
-    pts1_rect = []
-    pts2_rect = []
-    # ratio test as per Lowe's paper
-    for i, (m, n) in enumerate(matches_rect):
-        if m.distance < 0.8 * n.distance:
-            pts2_rect.append(kp2_rect[m.trainIdx].pt)
-            pts1_rect.append(kp1_rect[m.queryIdx].pt)
-    pts1_rect = np.int32(pts1_rect)
-    pts2_rect = np.int32(pts2_rect)
-    F_rect, mask_rect = cv2.findFundamentalMat(pts1_rect, pts2_rect, cv2.FM_LMEDS)
-    # We select only inlier points
-    pts1_rect = pts1_rect[mask_rect.ravel() == 1][::25, :]
-    pts2_rect = pts2_rect[mask_rect.ravel() == 1][::25, :]
-    lines1_rect = cv2.computeCorrespondEpilines(pts2_rect.reshape(-1, 1, 2), 2, F_rect)
-    lines1_rect = lines1_rect.reshape(-1, 3)
-    rect1_lines = draw_epilines_lines(rect1_gray, lines1_rect, pts1_rect)
-    lines2_rect = cv2.computeCorrespondEpilines(pts1_rect.reshape(-1, 1, 2), 1, F_rect)
-    lines2_rect = lines2_rect.reshape(-1, 3)
-    rect2_lines = draw_epilines_lines(rect2_gray, lines2_rect, pts2_rect)
-
-    fig = np.zeros((h, 2 * w, 3), dtype=np.uint8)
-    fig[:, :w, :] = rect1_lines
-    fig[:, w:, :] = rect2_lines
-    cv2.putText(fig, f"err: {rmse:.2f}", (0, 100), cv2.FONT_HERSHEY_SIMPLEX, 3, (255, 0, 0), 3, cv2.LINE_AA)
-
-    cv2.imwrite(str(save_path / "final_undistorted_w_epilines_image.png"), fig)
-
-
-def draw_epilines_lines(img: np.ndarray, lines: np.ndarray, pts: np.ndarray) -> np.ndarray:
-    ''' img1 - image on which we draw the epilines for the points in img2
-        lines - corresponding epilines '''
-    r, c = img.shape
-    img1 = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    for r, pt1 in zip(lines, pts):
-        color = tuple(np.random.randint(0, 255, 3).tolist())
-        x0, y0 = map(int, [0, -r[2] / r[1]])
-        x1, y1 = map(int, [c, -(r[2] + r[0] * c) / r[1]])
-        img1 = cv2.line(img1, (x0, y0), (x1, y1), color, 5)
-        img1 = cv2.circle(img1, tuple(pt1), 5, color, -1)
-    return img1
-
-
-def save_kitti_calibs(filepath: Path, rectify_dict: dict) -> None:
-    """
-    This just converts the rectified calibs into kitti style .txt ones.
-    (from kitti docs) Note: All matrices are stored row-major, i.e., the first values correspond
-    to the first row. R0_rect contains a 3x3 matrix which you need to extend to
-    a 4x4 matrix by adding a 1 as the bottom-right element and 0's elsewhere.
-    Tr_xxx is a 3x4 matrix (R|t), which you need to extend to a 4x4 matrix
-    in the same way!
-
-    The kitti style has a namingg convention which is duplicated here
-    P0 - left mono cam (not used) i.e. R=eye, T=0
-    P1 - right mono cam (not used) i.e. R=eye, T=0
-    P2 - left color cam
-    P3 - right color cam
-    R_rect - rotation to left rectified  (R0_rect)
-    Tr_velo_cam - rigid transform from velo (lidar used in kitti) to cam (not calculated here) i.e. R=eye, T=0
-    Tr_imu_velo - rigid transform from imu to velo (lidar used in kitti) (not calculated here) i.e. R=eye, T=0
-    """
-    calib = {}
-    calib["P0"] = np.block([np.eye(3), np.zeros((3, 1))])
-    calib["P1"] = np.block([np.eye(3), np.zeros((3, 1))])
-    calib["P2"] = rectify_dict["P1"]
-    calib["P3"] = rectify_dict["P2"]
-    calib["R_rect"] = rectify_dict["R1"]
-    calib["Tr_velo_cam"] = np.block([np.eye(3), np.zeros((3, 1))])
-    calib["Tr_imu_velo"] = np.block([np.eye(3), np.zeros((3, 1))])
-    save_calib(calib_path=filepath, calib=calib)
+        cv2.imwrite(str(rectified_save_path / f"undistorted_{str(i).zfill(4)}.png"), fig)
 
 
 def run(args: argparse.Namespace) -> None:
     root = Path(args.root)
     outputs_root = root / "outputs"
     outputs_root.mkdir(exist_ok=True, parents=True)
-    figs_path = outputs_root / "figs"
-    figs_path.mkdir(exist_ok=True, parents=True)
     data_path = outputs_root / "data"
     data_path.mkdir(exist_ok=True, parents=True)
-    camera_images = sorted(root.glob('*.png'))
+    camera_images_paths = sorted(root.glob('*.png'))
 
-    print(f"Found: {len(camera_images)} images")
+    print(f"Found: {len(camera_images_paths)} images")
     camera_images_list = []
-    for image_path in tqdm(camera_images, desc='Loading images...'):
+    for image_path in tqdm(camera_images_paths, desc='Loading images...'):
         im = cv2.imread(str(image_path), 1)
         camera_images_list.append(im)
     height, width, _ = camera_images_list[0].shape
 
     if not args.precomputed:
-        calibration_dict1 = calibrate_camera(args, camera_images_list, args.rows, args.columns, args.size)
-        save_camera_calibration(calibration_dict=calibration_dict1,
-                                image_paths=camera_images,
+        calibration_dict = calibrate_camera(args, camera_images_list, args.rows, args.columns, args.size)
+        save_camera_calibration(calibration_dict=calibration_dict,
+                                image_paths=camera_images_paths,
                                 filename=data_path / "calibration.npz")
     else:
-        calibration_dict1 = np.load(data_path / "calibration.npz")
+        calibration_dict = np.load(data_path / "calibration.npz")
 
-    refined_calibration_dict1 = refine_calibration(calibration_dict1, width, height, threshold=args.camera_threshold)
+    refined_calibration_dict = refine_calibration(calibration_dict, width, height, threshold=args.camera_threshold)
     if args.check:
-        check_calibration_reprojection(refined_calibration_dict1, camera_images_list, figs_path)
-    save_camera_calibration(calibration_dict=refined_calibration_dict1,
-                            image_paths=camera_images,
+        check_calibration_reprojection(refined_calibration_dict, camera_images_list, figs_path)
+    save_camera_calibration(calibration_dict=refined_calibration_dict,
+                            image_paths=camera_images_paths,
                             filename=data_path / "refined_calibration.npz")
 
-    print_calibration_results(calibration_dict1, refined_calibration_dict1)
+    print_calibration_results(calibration_dict, refined_calibration_dict)
+
+    plot_undistorted_images(root, camera_images_list, calibration_dict)
 
 
 def make_parser() -> argparse.Namespace:
