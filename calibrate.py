@@ -223,7 +223,7 @@ def print_calibration_results(calibration_dict: dict, refined_calibration_dict: 
 
     print(f"\nRefined results:\n")
     print(f"Refined RSME: {refined_calibration_dict['rmse']:.2f}")
-    for k in list(refined_calibration_dict.keys())
+    for k in list(refined_calibration_dict.keys()):
         if k == "K" or k == "D":
             print(f"{k}:\n{refined_calibration_dict[k]}")
 
@@ -343,7 +343,7 @@ def run(args: argparse.Namespace) -> None:
     figs_path.mkdir(exist_ok=True, parents=True)
     data_path = outputs_root / "data"
     data_path.mkdir(exist_ok=True, parents=True)
-    camera_images = sorted((root / args.left_folder).glob('*.png'))
+    camera_images = sorted(root.glob('*.png'))
 
     print(f"Found: {len(camera_images)} images")
     camera_images_list = []
